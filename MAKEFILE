@@ -1,0 +1,9 @@
+CC=gcc
+
+all: image_process
+
+image_process: main.c
+	$(CC) -o image_process main.c
+
+clean:
+	del /Q /F image_process.exe
