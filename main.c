@@ -13,17 +13,22 @@
 
 
 typedef struct {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    uint8_t padding;  // force 32-bit / 4-byte sized structs
+} pixel_t;
+
+typedef struct {
     uint32_t size_x;
     uint32_t size_y;
-    uint8_t* red;
-    uint8_t* green;
-    uint8_t* blue;
+    pixel_t* pixels;
 } img_t;
 
 
-int get_file_info(FILE* img_file, uint32_t* size_x, uint32_t* size_y);
+int get_file_info(FILE* img_file, uint32_t* size_x, uint32_t* size_y, uint32_t* max_val);
 
-int load_parse_file(img_t* img, FILE* img_file, uint32_t size_x, uint32_t size_y);
+int load_parse_file(img_t* img, FILE* img_file);
 
 int process_image(img_t* img, const char* filename, uint32_t FLAGS);
 
@@ -44,7 +49,7 @@ int main(int argc, char** argv) {
     img_t* img;
 
     if (argc < 2) {
-        fprintf(stderr, "Provide image file name as below:\n./img_process file_name.ppm\n\n");
+        fprintf(stderr, "Usage:\n%s <filename>\n\n", basename(argv[0]));
         return FAIL;
     }
 
