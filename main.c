@@ -112,9 +112,6 @@ img_t* new_img(void) {
 int load_file(img_t *img, FILE *img_file) {
     get_file_metadata(img, img_file);
 
-    printf("Img Width: %u\n", img->size_x);
-    printf("Img Height: %u\n", img->size_y);
-    printf("Img MaxRGBVal: %u\n", img->max_val);
     return SUCCESS;
 }
 
@@ -127,7 +124,7 @@ int get_file_metadata(img_t *img, FILE *img_file) {
 
     fgetc(img_file);  // skip to second character in the file
 
-    if (fgetc(img_file) == valid_ppm_version) {
+    if (fgetc(img_file) != valid_ppm_version) {
         fprintf(stderr, "Program detected file that was not P6 .ppm file.\nThis program only accepts P6 .ppm files.\n");
         return FAIL;
     }
