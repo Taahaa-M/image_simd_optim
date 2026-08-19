@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -33,6 +34,8 @@ void destroy_img(img_t *img_ptr);
 
 img_t* new_img(void);
 
+int save_file(img_t *img, const char *filename);
+
 int get_file_metadata(img_t *img, FILE *img_file);
 
 void _get_digit(char *dest_string, FILE *img_file);
@@ -66,7 +69,7 @@ int main(int argc, char **argv) {
 
     strncpy(img_filename, argv[IMG_NAME], MAX_FILENAME_LEN);
 
-    img_file = fopen(img_filename, "r");
+    img_file = fopen(img_filename, "rb");
 
     if (img_file == NULL) {
         fprintf(stderr, "Could not open file <%s>. Program exited.\n", img_filename);
@@ -99,23 +102,24 @@ void destroy_img(img_t *img_ptr) {
     free(img_ptr);
 }
 
+
 img_t* new_img(void) {
     img_t *img_ptr = (img_t*)malloc(sizeof(img_t));
-    if (img_ptr != NULL) {
-        img_ptr->pixels = NULL;  // this will be used in cleanup to determine
-                                 // whether pixels were allocated or not
-    } 
+    if (img_ptr != NULL) img_ptr->pixels = NULL;  // this will be used in cleanup to determine
+                                                  // whether pixels were allocated or not 
     return img_ptr;
 }
+
 
 int load_file(img_t *img, FILE *img_file) {
     uint32_t img_size;
     uint32_t pixels_read;
+    const char *output_filename = "something.ppm";
 
     get_file_metadata(img, img_file);
-    // it is assumed file pointer/cursor is at the correct position to read bytes
+    // it is assumed file pointer/cursor is at the correct position to read pixel data
     
-    img_size = img->size_x * img->size_y;  // this is sketchy for large images, but let's work with it for now
+    img_size = img->size_x * img->size_y;
 
     img->pixels = (pixel_t*)malloc(sizeof(pixel_t) * img_size);
     if (NULL == img->pixels) {
@@ -127,8 +131,32 @@ int load_file(img_t *img, FILE *img_file) {
     
     if (pixels_read != img_size) {
         fprintf(stderr, "Could not read all of file data correctly. Only read %u out of %u pixels\n", pixels_read, img_size);
+        fprintf(stderr, "EOF: %s\n", feof(img_file) ? "true" : "false");
+        fprintf(stderr, "File Error: %d\n", ferror(img_file));
         return FAIL;
     }
+
+    if (save_file(img, output_filename) == FAIL) {
+        fprintf(stderr, "No way this failed too :cry:\n");
+    }
+
+    printf("File saved at: <%s>\n", output_filename);
+
+    return SUCCESS;
+}
+
+
+int save_file(img_t *img, const char *filename) {
+    FILE *output_file = fopen(filename, "wb");
+    if (NULL == output_file) {
+        fprintf(stderr, "Could not open file <%s> to write to.\n", filename);
+        return FAIL;
+    }
+
+    fprintf(output_file, "P6\n%u %u\n%u\n", img->size_x, img->size_y, img->max_val);
+    fwrite(img->pixels, sizeof(pixel_t), img->size_x * img->size_y, output_file);
+
+    fclose(output_file);
 
     return SUCCESS;
 }
@@ -199,16 +227,41 @@ void _get_digit(char *dest_string, FILE *img_file) {
 
 int process_image(img_t *img, const char *filename, uint32_t flags) {
     img_t* new_img;
+    char new_filename[MAX_FILENAME_LEN + 1];
 
     if (flags & P_SIMD) {
         greyscale_SIMD(new_img, img);
-        invert_SIMD(new_img, img);
-        brightness_SIMD(new_img, img, 1.5);
-    }
+        snprintf(new_filename, MAX_FILENAME_LEN + 1, "greyscaled_%s", filename);
+        save_file(new_img, new_filename);
 
-    greyscale(new_img, img);
-    invert(new_img, img);
-    brightness(new_img, img, 1.5);
+        invert_SIMD(new_img, img);
+        snprintf(new_filename, MAX_FILENAME_LEN + 1, "inverted_%s", filename);
+        save_file(new_img, new_filename);
+
+        brightness_SIMD(new_img, img, 1.5);
+        snprintf(new_filename, MAX_FILENAME_LEN + 1, "brightened_%s", filename);
+        save_file(new_img, new_filename);
+
+        brightness_SIMD(new_img, img, 0.5);
+        snprintf(new_filename, MAX_FILENAME_LEN + 1, "darkened_%s", filename);
+        save_file(new_img, new_filename);
+    } else {
+        greyscale(new_img, img);
+        snprintf(new_filename, MAX_FILENAME_LEN + 1, "greyscaled_%s", filename);
+        save_file(new_img, new_filename);
+
+        invert(new_img, img);
+        snprintf(new_filename, MAX_FILENAME_LEN + 1, "inverted_%s", filename);
+        save_file(new_img, new_filename);
+
+        brightness(new_img, img, 1.5);
+        snprintf(new_filename, MAX_FILENAME_LEN + 1, "brightened_%s", filename);
+        save_file(new_img, new_filename);
+
+        brightness(new_img, img, 0.5);
+        snprintf(new_filename, MAX_FILENAME_LEN + 1, "darkened_%s", filename);
+        save_file(new_img, new_filename);
+    }
 
     return SUCCESS;
 }
