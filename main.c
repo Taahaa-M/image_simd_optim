@@ -19,7 +19,6 @@ typedef struct {
     uint8_t r;
     uint8_t g;
     uint8_t b;
-    uint8_t padding;  // force 32-bit / 4-byte sized structs
 } pixel_t;
 
 typedef struct {
@@ -110,7 +109,26 @@ img_t* new_img(void) {
 }
 
 int load_file(img_t *img, FILE *img_file) {
+    uint32_t img_size;
+    uint32_t pixels_read;
+
     get_file_metadata(img, img_file);
+    // it is assumed file pointer/cursor is at the correct position to read bytes
+    
+    img_size = img->size_x * img->size_y;  // this is sketchy for large images, but let's work with it for now
+
+    img->pixels = (pixel_t*)malloc(sizeof(pixel_t) * img_size);
+    if (NULL == img->pixels) {
+        fprintf(stderr, "Memory allocation error. Exiting program.\n");
+        return FAIL;
+    }
+
+    pixels_read = fread(img->pixels, sizeof(pixel_t), img_size, img_file);
+    
+    if (pixels_read != img_size) {
+        fprintf(stderr, "Could not read all of file data correctly. Only read %u out of %u pixels\n", pixels_read, img_size);
+        return FAIL;
+    }
 
     return SUCCESS;
 }
