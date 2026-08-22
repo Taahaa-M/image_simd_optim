@@ -1,9 +1,10 @@
-#include <stddef.h>
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 
 
 #define SUCCESS 0
@@ -13,7 +14,9 @@
 #define MAX_FILENAME_LEN 64
 #define MAX_DIM_DIGITS   10
 
-#define P_SIMD 2^0  // SIMD optimisation flag
+#define I_SHAPE_ONLY (uint32_t)pow(2, 0)  // copy image flag
+
+#define P_SIMD       (uint32_t)pow(2, 0)  // SIMD optimisation flag
 
 
 typedef struct {
@@ -29,10 +32,28 @@ typedef struct {
     uint32_t max_val;
 } img_t;
 
+typedef enum {
+    OP_GREYSCALE,
+    OP_INVERT,
+    OP_BRIGHTEN,
+
+    OP_COUNT
+} img_op_t;
+
+typedef void (*img_op_func_t)(img_t *dest_img, img_t *src_img);
+
+typedef struct {
+    const char *name;
+    img_op_func_t func;
+    img_op_func_t simd_func;
+} img_op_entry_t;
+
 
 void destroy_img(img_t *img_ptr);
 
 img_t* new_img(void);
+
+img_t* copy_img(img_t *src_img, uint32_t flags);
 
 int save_file(img_t *img, const char *filename);
 
@@ -42,19 +63,28 @@ void _get_digit(char *dest_string, FILE *img_file);
 
 int load_file(img_t *img, FILE *img_file);
 
-int process_image(img_t *img, const char *filename, uint32_t FLAGS);
+int process_img(img_t *img, char *filename, uint32_t flags);
 
 void greyscale(img_t *dest_img, img_t *src_img);
 
 void invert(img_t *dest_img, img_t *src_img);
 
-void brightness(img_t *dest_img, img_t *src_img, double multiplier);
+void brighten(img_t *dest_img, img_t *src_img);
 
 void greyscale_SIMD(img_t *dest_img, img_t *src_img);
 
 void invert_SIMD(img_t *dest_img, img_t *src_img);
 
-void brightness_SIMD(img_t *dest_img, img_t *src_img, double multiplier);
+void brighten_SIMD(img_t *dest_img, img_t *src_img);
+
+const char* get_basename(char *filename);
+
+
+const img_op_entry_t operations[OP_COUNT] = {
+    [OP_GREYSCALE] = {"greyscale", greyscale, greyscale_SIMD},
+    [OP_INVERT] = {"invert", invert, invert_SIMD},
+    [OP_BRIGHTEN] = {"brighten", brighten, brighten_SIMD},
+};
 
 
 int main(int argc, char **argv) {
@@ -89,6 +119,8 @@ int main(int argc, char **argv) {
         return FAIL;
     }
 
+    process_img(img, img_filename, 0);
+
     destroy_img(img);
 
     fclose(img_file);
@@ -105,8 +137,33 @@ void destroy_img(img_t *img_ptr) {
 
 img_t* new_img(void) {
     img_t *img_ptr = (img_t*)malloc(sizeof(img_t));
-    if (img_ptr != NULL) img_ptr->pixels = NULL;  // this will be used in cleanup to determine
-                                                  // whether pixels were allocated or not 
+    if (img_ptr != NULL) img_ptr->pixels = NULL;  // this will be used in cleanup (destroy_img) to
+                                                  // determine whether pixels were allocated or not 
+    return img_ptr;
+}
+
+
+img_t* copy_img(img_t *src_img, uint32_t flags) {
+    img_t *img_ptr;
+    pixel_t *pxls_ptr;
+    uint32_t img_size = src_img->size_x * src_img->size_y;
+
+    img_ptr = (img_t*)malloc(sizeof(img_t));
+    if (NULL == img_ptr) return NULL;
+
+    *img_ptr = *src_img;
+
+    pxls_ptr = (pixel_t*)malloc(sizeof(pixel_t) * img_size);
+    if (NULL == pxls_ptr) {
+        free(img_ptr);
+        return NULL;
+    }
+
+    img_ptr->pixels = pxls_ptr;
+    if (!(flags & I_SHAPE_ONLY)) {
+        memcpy(img_ptr->pixels, src_img->pixels, sizeof(pixel_t) * img_size);
+    }
+
     return img_ptr;
 }
 
@@ -114,7 +171,6 @@ img_t* new_img(void) {
 int load_file(img_t *img, FILE *img_file) {
     uint32_t img_size;
     uint32_t pixels_read;
-    const char *output_filename = "something.ppm";
 
     get_file_metadata(img, img_file);
     // it is assumed file pointer/cursor is at the correct position to read pixel data
@@ -136,12 +192,6 @@ int load_file(img_t *img, FILE *img_file) {
         return FAIL;
     }
 
-    if (save_file(img, output_filename) == FAIL) {
-        fprintf(stderr, "No way this failed too :cry:\n");
-    }
-
-    printf("File saved at: <%s>\n", output_filename);
-
     return SUCCESS;
 }
 
@@ -150,6 +200,7 @@ int save_file(img_t *img, const char *filename) {
     FILE *output_file = fopen(filename, "wb");
     if (NULL == output_file) {
         fprintf(stderr, "Could not open file <%s> to write to.\n", filename);
+        perror(filename);
         return FAIL;
     }
 
@@ -225,42 +276,44 @@ void _get_digit(char *dest_string, FILE *img_file) {
 }
 
 
-int process_image(img_t *img, const char *filename, uint32_t flags) {
-    img_t* new_img;
+int process_img(img_t *img, char *filename, uint32_t flags) {
+    img_t* img_buf;
     char new_filename[MAX_FILENAME_LEN + 1];
+    char base_filename[MAX_FILENAME_LEN + 1];
+    int file_save_check = SUCCESS;
+    uint32_t f_ptr_offset;  // used to decide SIMD function or not
+                           // measured in bytes - hence uint8_t
+    img_op_func_t f_ptr_buffer;
 
-    if (flags & P_SIMD) {
-        greyscale_SIMD(new_img, img);
-        snprintf(new_filename, MAX_FILENAME_LEN + 1, "greyscaled_%s", filename);
-        save_file(new_img, new_filename);
+    char *simd_label = (flags & P_SIMD) ? "SIMD_" : "";
 
-        invert_SIMD(new_img, img);
-        snprintf(new_filename, MAX_FILENAME_LEN + 1, "inverted_%s", filename);
-        save_file(new_img, new_filename);
+    strncpy(base_filename, get_basename(filename), MAX_FILENAME_LEN);
 
-        brightness_SIMD(new_img, img, 1.5);
-        snprintf(new_filename, MAX_FILENAME_LEN + 1, "brightened_%s", filename);
-        save_file(new_img, new_filename);
+    img_buf = copy_img(img, I_SHAPE_ONLY);
+    if (NULL == img_buf) {
+        fprintf(stderr, "Memory allocation failed.\n");
+        return FAIL;
+    }
 
-        brightness_SIMD(new_img, img, 0.5);
-        snprintf(new_filename, MAX_FILENAME_LEN + 1, "darkened_%s", filename);
-        save_file(new_img, new_filename);
-    } else {
-        greyscale(new_img, img);
-        snprintf(new_filename, MAX_FILENAME_LEN + 1, "greyscaled_%s", filename);
-        save_file(new_img, new_filename);
+    // choose either the SIMD function or std using ptr offsets inside the struct img_op_entry_t
+    f_ptr_offset = (flags & P_SIMD) ? offsetof(img_op_entry_t, simd_func) : offsetof(img_op_entry_t, func);
 
-        invert(new_img, img);
-        snprintf(new_filename, MAX_FILENAME_LEN + 1, "inverted_%s", filename);
-        save_file(new_img, new_filename);
+    for (int i = 0; i < OP_COUNT; i++) {
+        f_ptr_buffer = *(img_op_func_t*)((uint8_t*)(operations + i) + f_ptr_offset);
+        f_ptr_buffer(img_buf, img);
 
-        brightness(new_img, img, 1.5);
-        snprintf(new_filename, MAX_FILENAME_LEN + 1, "brightened_%s", filename);
-        save_file(new_img, new_filename);
+        snprintf(
+            new_filename, MAX_FILENAME_LEN + 1, "%s_%s%s.ppm",
+            operations[i].name, simd_label, base_filename
+        );
+        file_save_check &= save_file(img_buf, new_filename);
+    }
 
-        brightness(new_img, img, 0.5);
-        snprintf(new_filename, MAX_FILENAME_LEN + 1, "darkened_%s", filename);
-        save_file(new_img, new_filename);
+    destroy_img(img_buf);
+
+    if (file_save_check != SUCCESS) {
+        fprintf(stderr, "Saving new image files failed.\n");
+        return FAIL;
     }
 
     return SUCCESS;
@@ -268,23 +321,98 @@ int process_image(img_t *img, const char *filename, uint32_t flags) {
 
 
 void greyscale(img_t *dest_img, img_t *src_img) {
+    // it is assumed both images are of the same shape (via the copy_img_shape function)
+    pixel_t *src_pxl;
+    pixel_t *dest_pxl;
+    uint32_t pxl_count = src_img->size_x * src_img->size_y;
+    double brightness;
+    
+    for (src_pxl = src_img->pixels, dest_pxl = dest_img->pixels;
+        (src_pxl - src_img->pixels) < pxl_count;
+        src_pxl++, dest_pxl++) {
+        // take the normalised brightness
+        brightness = pow((src_pxl->r*src_pxl->r + src_pxl->g*src_pxl->g + src_pxl->b*src_pxl->b), 0.5) / sqrt(3);
+
+        // should already be clamped to 255, but floating point stuff
+        brightness = fmax(fmin(brightness, (double)src_img->max_val), 0.0);
+
+        dest_pxl->r = dest_pxl->g = dest_pxl->b = (uint8_t)brightness;
+    }
 }
 
 
 void invert(img_t *dest_img, img_t *src_img) {
+    // it is assumed both images are of the same shape and max_val (via the copy_img_shape function)
+    pixel_t *src_pxl;
+    pixel_t *dest_pxl;
+    uint32_t pxl_count = src_img->size_x * src_img->size_y;
+    uint32_t max_val = src_img->max_val;
+    
+    for (src_pxl = src_img->pixels, dest_pxl = dest_img->pixels;
+        (src_pxl - src_img->pixels) < pxl_count;
+        src_pxl++, dest_pxl++) {
+        dest_pxl->r = max_val - src_pxl->r;
+        dest_pxl->g = max_val - src_pxl->g;
+        dest_pxl->b = max_val - src_pxl->b;
+    }
 }
 
 
-void brightness(img_t *dest_img, img_t *src_img, double multiplier) {
+void brighten(img_t *dest_img, img_t *src_img) {
+    // it is assumed both images are of the same shape (via the copy_img_shape function)
+    const uint8_t boost = (uint8_t)src_img->max_val * 0.12;
+    pixel_t *src_pxl;
+    pixel_t *dest_pxl;
+    uint32_t pxl_count = src_img->size_x * src_img->size_y;
+    uint32_t max_val = src_img->max_val;
+    
+    for (src_pxl = src_img->pixels, dest_pxl = dest_img->pixels;
+        (src_pxl - src_img->pixels) < pxl_count;
+        src_pxl++, dest_pxl++) {
+
+        dest_pxl->r = (src_pxl->r + boost) < max_val ? src_pxl->r + boost : max_val;
+        dest_pxl->g = (src_pxl->g + boost) < max_val ? src_pxl->g + boost : max_val;
+        dest_pxl->b = (src_pxl->b + boost) < max_val ? src_pxl->b + boost : max_val;
+    }
 }
 
 void greyscale_SIMD(img_t *dest_img, img_t *src_img) {
+    *dest_img = *src_img;
 }
 
 
 void invert_SIMD(img_t *dest_img, img_t *src_img) {
+    *dest_img = *src_img;
 }
 
 
-void brightness_SIMD(img_t *dest_img, img_t *src_img, double multiplier) {
+void brighten_SIMD(img_t *dest_img, img_t *src_img) {
+    *dest_img = *src_img;
+}
+
+
+const char* get_basename(char *filename) {
+    // assumes null-terminated string
+    // mutates incoming string (kinda)
+    uint32_t len_str = strlen(filename);
+    uint32_t last_slash_offset = len_str + 1;
+    // use +1 to flag it has not been set
+
+    for (int i = len_str - 1; i >= 0; i--) {
+        if (filename[i] == '.') {
+            filename[i] = '\0';
+            break;
+        }
+    }
+
+    for (int i = len_str - 1; i > 0; i--) {
+        if (filename[i] == '/' || filename[i] == '\\') {
+            last_slash_offset = i;
+            break;
+        }
+    }
+
+    if (last_slash_offset > len_str) return filename;
+
+    return filename + last_slash_offset + 1;
 }

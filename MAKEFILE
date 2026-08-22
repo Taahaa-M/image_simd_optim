@@ -1,9 +1,25 @@
 CC=gcc
+OBJ_FLAGS=-c
+DEBUG_FLAGS=-g -Wall -o
+RELEASE_FLAGS=-o
 
-all: image_process
+debug: image_process_debug.o image_process_debug
+
+release: image_process
+
+image_process_debug: main.c image_process_debug.o
+	$(CC) $(DEBUG_FLAGS) image_process_debug image_process_debug.o
+
+image_process_debug.o:
+	$(CC) $(OBJ_FLAGS) $(DEBUG_FLAGS) image_process_debug.o main.c
 
 image_process: main.c
-	$(CC) -o image_process main.c
+	$(CC) $(RELEASE_FLAGS) image_process main.c
 
 clean:
 	del /Q /F image_process.exe
+	del /Q /F image_process_debug.exe
+	del /Q /F image_process_debug.o
+	del /Q /F brighten*.ppm
+	del /Q /F invert*.ppm
+	del /Q /F greyscale*.ppm
