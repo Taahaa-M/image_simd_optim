@@ -54,7 +54,7 @@ void destroy_img(img_t *img_ptr);
 
 img_t* new_img(void);
 
-img_t* copy_img(img_t *src_img, uint32_t flags);
+img_t* copy_img(const img_t *src_img, uint32_t flags);
 
 int save_file(img_t *img, const char *filename);
 
@@ -120,8 +120,8 @@ int main(int argc, char **argv) {
         return FAIL;
     }
 
-    process_img(img, img_filename, P_SIMD);
     process_img(img, img_filename, 0);
+    process_img(img, img_filename, P_SIMD);
 
     destroy_img(img);
 
@@ -146,7 +146,7 @@ img_t* new_img(void) {
 }
 
 
-img_t* copy_img(img_t *src_img, uint32_t flags) {
+img_t* copy_img(const img_t *src_img, uint32_t flags) {
     img_t *img_ptr;
     pixel_t *pxls_ptr;
     uint32_t img_size = src_img->size_x * src_img->size_y;
@@ -163,8 +163,11 @@ img_t* copy_img(img_t *src_img, uint32_t flags) {
     }
 
     img_ptr->pixels = pxls_ptr;
+
     if (!(flags & I_SHAPE_ONLY)) {
         memcpy(img_ptr->pixels, src_img->pixels, sizeof(pixel_t) * img_size);
+    } else {
+	memset(img_ptr->pixels, 0, sizeof(pixel_t) * img_size);
     }
 
     return img_ptr;
@@ -333,12 +336,14 @@ void greyscale(img_t *dest_img, img_t *src_img) {
     for (src_pxl = src_img->pixels, dest_pxl = dest_img->pixels;
         (src_pxl - src_img->pixels) < pxl_count;
         src_pxl++, dest_pxl++) {
-        // take the normalised brightness
-        brightness = pow((src_pxl->r*src_pxl->r + src_pxl->g*src_pxl->g + src_pxl->b*src_pxl->b), 0.5) / sqrt(3);
+        /* // take the normalised brightness
+        brightness = pow((src_pxl->r*src_pxl->r + src_pxl->g*src_pxl->g + src_pxl->b*src_pxl->b), 0.5) / sqrt(3); */
 
-        // should already be clamped to 255, but floating point stuff
+	brightness = 0.299 * src_pxl->r + 0.587 * src_pxl->g + 0.114 * src_pxl->b;
+	// luminance matrix co-efficients - due to human eye sensitivity differences in colour
+	
+        // should already be clamped to max_val, but floating point stuff
         brightness = fmax(fmin(brightness, (double)src_img->max_val), 0.0);
-
         dest_pxl->r = dest_pxl->g = dest_pxl->b = (uint8_t)brightness;
     }
 }
@@ -380,7 +385,25 @@ void brighten(img_t *dest_img, img_t *src_img) {
 }
 
 void greyscale_SIMD(img_t *dest_img, img_t *src_img) {
-    *dest_img = *src_img;
+    // it is assumed both images are of the same shape (via the copy_img_shape function)
+    pixel_t *src_pxl;
+    pixel_t *dest_pxl;
+    uint32_t pxl_count = src_img->size_x * src_img->size_y;
+    double brightness;
+    
+    for (src_pxl = src_img->pixels, dest_pxl = dest_img->pixels;
+        (src_pxl - src_img->pixels) < pxl_count;
+        src_pxl++, dest_pxl++) {
+        // take the normalised brightness
+        brightness = pow((src_pxl->r*src_pxl->r + src_pxl->g*src_pxl->g + src_pxl->b*src_pxl->b), 0.5) / sqrt(3);
+
+	// brightness = 0.299 * src_pxl->r + 0.587 * src_pxl->g + 0.114 * src_pxl->b;
+	// luminance matrix co-efficients - due to human eye sensitivity differences in colour
+	
+        // should already be clamped to max_val, but floating point stuff
+        brightness = fmax(fmin(brightness, (double)src_img->max_val), 0.0);
+        dest_pxl->r = dest_pxl->g = dest_pxl->b = (uint8_t)brightness;
+    }
 }
 
 
@@ -420,7 +443,38 @@ void invert_SIMD(img_t *dest_img, img_t *src_img) {
 
 
 void brighten_SIMD(img_t *dest_img, img_t *src_img) {
-    *dest_img = *src_img;
+    // it is assumed both images are of the same shape and max_val (via the copy_img_shape function)
+    const uint8_t boost = (uint8_t)src_img->max_val * 0.12;
+    uint8_t *src_byte = (uint8_t*)src_img->pixels;
+    uint8_t *dest_byte = (uint8_t*)dest_img->pixels;
+    uint32_t pxl_count = src_img->size_x * src_img->size_y;
+    const uint32_t bytes_per_op = 256 / (sizeof(uint8_t) * 8);
+    const uint32_t bytes_remainder = (sizeof(pixel_t) * pxl_count) % (256/8);
+
+    simde__m256i src_pxls;
+
+    simde__m256i boost_vec = simde_mm256_set1_epi8(boost);
+    
+    for (uint32_t i = 0; i < pxl_count * sizeof(pixel_t); i+= bytes_per_op) {
+        src_pxls = simde_mm256_loadu_si256(src_byte + i);
+        simde_mm256_storeu_si256(
+            dest_byte + i,
+            simde_mm256_adds_epu8(boost_vec, src_pxls)
+        );
+    }
+
+    // set src and dest to the end 256 bits of pixel array
+    src_byte = (uint8_t*)src_img->pixels + pxl_count;  // do not dereference here
+    src_byte -= bytes_remainder;
+
+    dest_byte = (uint8_t*)dest_img->pixels + pxl_count;
+    dest_byte -= bytes_remainder;
+
+    src_pxls = simde_mm256_loadu_si256(src_byte);
+    simde_mm256_storeu_si256(
+        dest_byte,
+        simde_mm256_adds_epu8(boost_vec, src_pxls)
+    );
 }
 
 
