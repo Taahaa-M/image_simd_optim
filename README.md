@@ -1,3 +1,16 @@
-This is a simple test for SIMD optimisations using SIMD intrinsics in C.
+This is a simple experimentation of SIMD instructions using intrinsics in C.
 
-If you would like to run this code yourself, please tinker with the MAKEFILE and/or its variables to make this work on your machine. Thanks for checking this out.
+Instructions:
+
+```git clone --recurse-submodules <your-repository-url>```
+Change *$OS* in *Makefile* to reflect the Operating System used.
+
+```make release```
+
+```./image_process <filename.ppm>```
+
+To investigate the SIMD optimisation effect, use a profiler to find time deltas for the _SIMD suffixed functions and their counterparts.
+
+To clean:
+
+```make clean```
