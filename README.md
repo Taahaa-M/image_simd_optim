@@ -3,6 +3,7 @@ This is a simple experimentation of SIMD instructions using intrinsics in C.
 Instructions:
 
 ```git clone --recurse-submodules <your-repository-url>```
+
 Change *$OS* in *Makefile* to reflect the Operating System used.
 
 ```make release```
