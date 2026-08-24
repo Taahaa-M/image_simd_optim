@@ -2,7 +2,7 @@ This is a simple experimentation of SIMD instructions using intrinsics in C.
 
 Instructions:
 
-```git clone --recurse-submodules <your-repository-url>```
+```git clone --recurse-submodules git@github.com:Taahaa-M/image_simd_optim```
 
 Change *$OS* in *Makefile* to reflect the Operating System used.
 
