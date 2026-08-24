@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <simde/x86/avx2.h>
 
 
 #define SUCCESS 0
@@ -119,6 +120,7 @@ int main(int argc, char **argv) {
         return FAIL;
     }
 
+    process_img(img, img_filename, P_SIMD);
     process_img(img, img_filename, 0);
 
     destroy_img(img);
@@ -130,6 +132,7 @@ int main(int argc, char **argv) {
 
 
 void destroy_img(img_t *img_ptr) {
+    if (NULL == img_ptr) return;
     if (img_ptr->pixels != NULL) free(img_ptr->pixels);  // NULL implies no pixels were allocated
     free(img_ptr);
 }
@@ -277,7 +280,7 @@ void _get_digit(char *dest_string, FILE *img_file) {
 
 
 int process_img(img_t *img, char *filename, uint32_t flags) {
-    img_t* img_buf;
+    img_t* img_buf = NULL;
     char new_filename[MAX_FILENAME_LEN + 1];
     char base_filename[MAX_FILENAME_LEN + 1];
     int file_save_check = SUCCESS;
@@ -306,7 +309,7 @@ int process_img(img_t *img, char *filename, uint32_t flags) {
             new_filename, MAX_FILENAME_LEN + 1, "%s_%s%s.ppm",
             operations[i].name, simd_label, base_filename
         );
-        file_save_check &= save_file(img_buf, new_filename);
+        file_save_check |= save_file(img_buf, new_filename);
     }
 
     destroy_img(img_buf);
@@ -382,7 +385,37 @@ void greyscale_SIMD(img_t *dest_img, img_t *src_img) {
 
 
 void invert_SIMD(img_t *dest_img, img_t *src_img) {
-    *dest_img = *src_img;
+    // it is assumed both images are of the same shape and max_val (via the copy_img_shape function)
+    uint8_t *src_byte = (uint8_t*)src_img->pixels;
+    uint8_t *dest_byte = (uint8_t*)dest_img->pixels;
+    uint32_t pxl_count = src_img->size_x * src_img->size_y;
+    const uint32_t bytes_per_op = 256 / (sizeof(uint8_t) * 8);
+    const uint32_t bytes_remainder = (sizeof(pixel_t) * pxl_count) % (256/8);
+
+    simde__m256i src_pxls;
+
+    simde__m256i max_val = simde_mm256_set1_epi8(src_img->max_val);
+    
+    for (uint32_t i = 0; i < pxl_count * sizeof(pixel_t); i+= bytes_per_op) {
+        src_pxls = simde_mm256_loadu_si256(src_byte + i);
+        simde_mm256_storeu_si256(
+            dest_byte + i,
+            simde_mm256_subs_epu8(max_val, src_pxls)
+        );
+    }
+
+    // set src and dest to the end 256 bits of pixel array
+    src_byte = (uint8_t*)src_img->pixels + pxl_count;  // do not dereference here
+    src_byte -= bytes_remainder;
+
+    dest_byte = (uint8_t*)dest_img->pixels + pxl_count;
+    dest_byte -= bytes_remainder;
+
+    src_pxls = simde_mm256_loadu_si256(src_byte);
+    simde_mm256_storeu_si256(
+        dest_byte,
+        simde_mm256_subs_epu8(max_val, src_pxls)
+    );
 }
 
 

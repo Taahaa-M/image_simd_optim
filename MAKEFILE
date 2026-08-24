@@ -1,20 +1,21 @@
-CC=gcc
+CC?=gcc
 OBJ_FLAGS=-c
-DEBUG_FLAGS=-g -Wall -o
-RELEASE_FLAGS=-o
+LIB_FLAGS=-Ithird_party
+DEBUG_FLAGS=-fsanitize=address -g -Wall -mavx2 -o
+RELEASE_FLAGS=-mavx2 -o
 
 debug: image_process_debug.o image_process_debug
 
 release: image_process
 
 image_process_debug: main.c image_process_debug.o
-	$(CC) $(DEBUG_FLAGS) image_process_debug image_process_debug.o
+	$(CC) $(LIB_FLAGS) $(DEBUG_FLAGS) image_process_debug image_process_debug.o
 
 image_process_debug.o:
-	$(CC) $(OBJ_FLAGS) $(DEBUG_FLAGS) image_process_debug.o main.c
+	$(CC) $(LIB_FLAGS) $(OBJ_FLAGS) $(DEBUG_FLAGS) image_process_debug.o main.c
 
 image_process: main.c
-	$(CC) $(RELEASE_FLAGS) image_process main.c
+	$(CC) $(LIB_FLAGS) $(RELEASE_FLAGS) image_process main.c
 
 clean:
 	del /Q /F image_process.exe
